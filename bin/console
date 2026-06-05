@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Start an IRB session with the project's classes loaded.
+
+exec bundle exec irb -Ilib -r search_result

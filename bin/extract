@@ -1,0 +1,14 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Extract a Google paintings carousel from a saved HTML page and print the JSON.
+# Usage: bin/extract files/van-gogh-paintings.html
+
+require "json"
+require_relative "../lib/search_result"
+
+path = ARGV[0]
+abort "usage: bin/extract PATH_TO_HTML" if path.nil?
+abort "file not found: #{path}" unless File.file?(path)
+
+puts JSON.pretty_generate(SearchResult.from_file(path).to_h)
