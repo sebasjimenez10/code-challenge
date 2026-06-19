@@ -9,6 +9,11 @@ require_relative "image_resolver"
 #
 # The selectors are deliberately *structural* rather than class-based: Google
 # rotates its obfuscated class names between captures.
+#
+# Carousel cells live in the live DOM, except on newer captures, which pre-render
+# only the first cells and ship the rest as escaped HTML inside a <script> (a
+# lazily-injected grid). We decode those scripts back into parseable documents and
+# run the *same* extraction rule over every document.
 class Parser
   GOOGLE_HOST = "https://www.google.com"
 
@@ -21,24 +26,42 @@ class Parser
   end
 
   def artworks
-    carousel_anchors.map { |anchor| build_artwork(anchor) }
+    sources.flat_map { |doc| carousel_anchors(doc) }.map { |anchor| build_artwork(anchor) }
   end
 
   private
 
-  def carousel_anchors
-    @document.css(CAROUSEL_ANCHOR_SELECTOR).select { |a| a.at_css("img") }
+  # The live document, plus any deferred grid a newer capture hid as escaped HTML
+  # inside a <script>, decoded back into a parseable document.
+  def sources
+    [@document] + @document.css("script").filter_map { |script| decoded_grid(script.content) }
+  end
+
+  def decoded_grid(body)
+    Nokogiri::HTML(unescape_js(body)) if body.include?("stick=")
+  end
+
+  def carousel_anchors(doc)
+    doc.css(CAROUSEL_ANCHOR_SELECTOR).select { |anchor| anchor.at_css("img") }
   end
 
   def build_artwork(anchor)
     img = anchor.at_css("img")
+    captions = caption_texts(anchor)
 
     Artwork.new(
-      name: normalize(img["alt"]), # the img alt is the painting title on every capture
-      extensions: caption_texts(anchor).drop(1), # caption rows after the title (e.g. the date)
+      name: name_for(img, captions),
+      extensions: captions.drop(1), # caption rows after the title (e.g. the date)
       link: link_for(anchor),
       image: @image_resolver.resolve(img)
     )
+  end
+
+  # The title is the img alt on older captures; newer captures leave the alt
+  # empty and carry the title only in the first caption row. Prefer the alt.
+  def name_for(img, captions)
+    alt = normalize(img["alt"])
+    alt.empty? ? captions.first.to_s : alt
   end
 
   # The caption is a stack of leaf <div> text rows (title first, then metadata
@@ -58,5 +81,13 @@ class Parser
 
   def normalize(text)
     text.to_s.gsub(/\s+/, " ").strip
+  end
+
+  # A script serializes the grid HTML as a JS string: `<` becomes `\x3c`, non-ASCII
+  # becomes `\uXXXX`, and quotes/slashes are backslash-escaped. Decode them all back.
+  def unescape_js(str)
+    str
+      .gsub(/\\x(\h{2})|\\u(\h{4})/) { (Regexp.last_match(1) || Regexp.last_match(2)).hex.chr(Encoding::UTF_8) }
+      .gsub(%r{\\(['"/\\])}, '\1')
   end
 end

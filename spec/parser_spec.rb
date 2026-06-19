@@ -82,6 +82,73 @@ RSpec.describe Parser do
     end
   end
 
+  # Newer captures (e.g. the Taylor Swift albums page) leave the img alt empty and
+  # carry the title only in the first caption row instead of duplicating it in alt.
+  describe "name falls back to the caption when the img alt is empty" do
+    let(:html) do
+      <<~HTML
+        <html><body>
+          <div class="iELo6">
+            <a href="/search?q=Lover&amp;stick=LV">
+              <img class="taFZJe" alt=""
+                   data-src="https://encrypted-tbn0.gstatic.com/images?q=tbn:LOV"
+                   src="data:image/gif;base64,PLACEHOLDER" />
+              <div class="KHK6lb">
+                <div class="pgNMRc">Lover</div>
+                <div class="cxzHyb">2019</div>
+              </div>
+            </a>
+          </div>
+        </body></html>
+      HTML
+    end
+
+    it "uses the first caption row as the name, keeping the date in extensions" do
+      art = described_class.new(html).artworks.first
+      expect(art.name).to eq("Lover")
+      expect(art.extensions).to eq(["2019"])
+    end
+  end
+
+  # Newer captures pre-render only the first cells; the rest arrive as escaped HTML
+  # inside a <script> (a lazily-injected grid). The parser decodes and parses it.
+  describe "items deferred into an escaped-HTML script grid" do
+    # Single-quoted heredoc: backslash escapes stay literal, mirroring the raw page.
+    let(:html) do
+      <<~'HTML'
+        <html><body>
+          <div class="iELo6">
+            <a href="/search?q=Lover&amp;stick=LV">
+              <img alt="Lover"
+                   data-src="https://encrypted-tbn0.gstatic.com/images?q=tbn:LOV"
+                   src="data:image/gif;base64,PLACEHOLDER" />
+              <div class="KHK6lb"><div class="pgNMRc">Lover</div><div class="cxzHyb">2019</div></div>
+            </a>
+          </div>
+          <script>
+            window.grid = [
+              '\x3ca href="/search?q=Fearless\x26stick=FV"\x3e\x3cwp-grid-tile\x3e\x3cimg alt="" data-src="https://encrypted-tbn0.gstatic.com/images?q=tbn:FV"\x3e\x3cdiv class="JjtOHd"\x3eFearless (Taylor\u2019s Version)\x3c/div\x3e\x3cdiv class="cHaqb"\x3e2021, EP\x3c/div\x3e\x3c/wp-grid-tile\x3e\x3c/a\x3e',
+            ];
+          </script>
+        </body></html>
+      HTML
+    end
+
+    let(:artworks) { described_class.new(html).artworks }
+
+    it "extracts both the DOM cell and the script-only cell" do
+      # The script title's ’ escape is decoded to a curly apostrophe.
+      expect(artworks.map(&:name)).to eq(["Lover", "Fearless (Taylor’s Version)"])
+    end
+
+    it "decodes the deferred item's fields" do
+      grid_item = artworks.last
+      expect(grid_item.extensions).to eq(["2021, EP"])
+      expect(grid_item.link).to eq("https://www.google.com/search?q=Fearless&stick=FV")
+      expect(grid_item.image).to eq("https://encrypted-tbn0.gstatic.com/images?q=tbn:FV")
+    end
+  end
+
   # Google rotates the obfuscated class names between captures, so the parser must
   # rely on structure (a stick anchor wrapping an img + a title/date caption),
   # not on specific class names.
